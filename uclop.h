@@ -124,14 +124,22 @@ void uclop__usage( uclop *self, char *prog ) {
     }
 }
 
-void ucmd__store_arg( ucmd *self, char *name, char *val ) {
+uopt *ucmd__find_arg( ucmd *self, char *name ) {
     uopt *opt = self->head;
     while( opt ) {
         if( !strcmp( name, opt->name ) ) {
-            opt->val = val;
-            return;
+            return opt;
         }
         opt = opt->next;
+    }
+    return NULL;
+}
+
+void ucmd__store_arg( ucmd *self, char *name, char *val ) {
+    uopt *opt = ucmd__find_arg( self, name );
+    if( opt ) {
+        opt->val = val;
+        return;
     }
     fprintf( stderr, "Unknown option %s\n", name );
     exit(1);
@@ -186,7 +194,11 @@ void uclop__run( uclop *self, int argc, char *argv[] ) {
     for( int i=start;i<=argc;i++ ) {
         char *arg = argv[i];
         if( arg[0] == '-' ) {
-            ucmd__store_arg( cmd, arg, argv[++i] );
+            uopt *opt = ucmd__find_arg( cmd, arg );
+            if( opt ) {
+                if( opt->type == 2 ) ucmd__store_arg( cmd, arg, "" );
+                else ucmd__store_arg( cmd, arg, argv[++i] );
+            }
         }
     }
     

@@ -8,16 +8,29 @@
 
 int mynano__new( char *spec, int bind ) {
     int sock = nn_socket( AF_SP, bind ? NN_PULL : NN_PUSH );
-    if( sock < 0 ) { fprintf(stderr, "nanomsg socket creation err: %i\n", sock ); exit(1); }
+    int seconds = 1000;
+    nn_setsockopt( sock, NN_SOL_SOCKET, NN_SNDTIMEO, &seconds, sizeof( seconds ) );
+    if( sock < 0 ) { NSLog( @"nanomsg socket creation err: %d", sock ); exit(1); }
     int rv;
     if( bind ) rv = nn_bind( sock, spec );
     else       rv = nn_connect( sock, spec );
-    if( rv < 0 ) { fprintf(stderr, "nanomsg bind/connect err: %i\n", rv ); exit(1); }
+    if( rv < 0 ) { NSLog( @"nanomsg bind/connect err: %d", rv ); exit(1); }
     return sock; 
 }
 
+void setup_nanomsg_socket( char *nanoSpec, int *nanoOut ) {
+    if( nanoSpec ) {
+        *nanoOut = mynano__new( nanoSpec, 0 ); // 0 means connect to socket
+        NSLog(@"Send data to nanomsg %s", nanoSpec );
+    }
+    else *nanoOut = -1;
+}
+
 void mynano__send( int n, void *data, int size ) {
-    nn_send( n, data, size, 0 );
+    int sent = nn_send( n, data, size, 0 );
+    if( sent != size ) {
+        NSLog(@"Send failed; sent=%d, size=%d", sent, size );
+    }
 }
 
 void mynano__send_jpeg( unsigned char *data, unsigned long dataLen, int n, int ow, int oh, int dw, int dh ) {
@@ -71,7 +84,7 @@ char frameDif( unsigned char *f1, unsigned char *f2, int l1, int w, int h, int v
         int lstart = l1 * y;
         uint8_t *d1 = (uint8_t *) &f1[0] + lstart;
         uint8_t *d2 = (uint8_t *) &f2[0] + lstart;
-        for( int x=0;x<w;x+=3,d1+=12,d2+=12 ) {
+        for( int x=0;x<w;x+=9,d1+=12,d2+=12 ) {
             uint8_t r1 = *d1;
             uint8_t g1 = *(d1+1);
             uint8_t b1 = *(d1+2);
@@ -109,14 +122,18 @@ char frameDif( unsigned char *f1, unsigned char *f2, int l1, int w, int h, int v
 @property (assign) CMSampleBufferRef prevSample;
 @property (assign) unsigned char *prevBgra;
 @property (assign) CVImageBufferRef prevIbuf;
-@property (assign) int nanoOut;
+//@property (assign) int nanoOut;
+//@property (assign) char *nanoSpec;
 @property (assign) int verbose;
+@property (assign) int outSock;
+@property (assign) int frameSkip;
+@property (assign) int frameNum;
 
 @end
 
 @implementation RecodeDelegate
 
-- (id) initWithFile:(char *)outFile andNanoOut:(int)nanoOut andVerbose:(int)verbose {
+- (id) initWithFile:(char *)outFile andVerbose:(int)verbose andFrameSkip:(int)frameSkip {
     [super init];
     
     _compressor = tjInitCompress();
@@ -128,8 +145,12 @@ char frameDif( unsigned char *f1, unsigned char *f2, int l1, int w, int h, int v
     _outFile = outFile;
     _prevBgra = NULL;
     _prevSample = NULL;
-    _nanoOut = nanoOut;
+    //_nanoOut = -1;
+    //_nanoSpec = nanoSpec;
     _verbose = verbose;
+    _outSock = -1;
+    _frameSkip = frameSkip;
+    _frameNum = 0;
     
     return self;
 }
@@ -157,10 +178,14 @@ char frameDif( unsigned char *f1, unsigned char *f2, int l1, int w, int h, int v
         dif = frameDif( _prevBgra, bgra, bytesPerRow, width, height, _verbose );
     }
     
+    _frameNum++;
+    
     if( _verbose ) NSLog(@"Width: %d Height: %d Changed:%d\n", width, height, dif );
     
     // Only if we decided to use the new frame
     if( dif ) {
+        if( _frameSkip && _frameNum >= _frameSkip ) _frameNum = 0;
+    
         if( _prevBgra ) {
             CVPixelBufferUnlockBaseAddress( _prevIbuf, kCVPixelBufferLock_ReadOnly );
             CFRelease( _prevSample );
@@ -190,8 +215,22 @@ char frameDif( unsigned char *f1, unsigned char *f2, int l1, int w, int h, int v
             NSLog(@"Wrote JPEG; File:%s Width: %d Height: %d\n", _outFile, width, height );
             _wroteJpeg = 1;
         }
-        if( _nanoOut ) {
-            mynano__send_jpeg( _jpegData, _jpegSize, _nanoOut, width, height, width, height );
+        //if( _nanoSpec && _nanoOut == -1 ) {
+        //    NSLog(@"Attempting nanomsg setup");
+        //    setup_nanomsg_socket( _nanoSpec, &_nanoOut );
+        //    NSLog(@"Finished nanomsg setup; nanoOut=%d", _nanoOut);
+        //}
+        if( _outSock == -1 ) {
+            _outSock = nn_socket( AF_SP, NN_PUSH );
+            nn_connect( _outSock, "inproc://img");
+        }
+            
+        if( _outSock != -1 ) {
+            if( _frameSkip ) {
+                if( _frameNum == 0 ) mynano__send_jpeg( _jpegData, _jpegSize, _outSock, width, height, width, height );
+            }
+            else mynano__send_jpeg( _jpegData, _jpegSize, _outSock, width, height, width, height );
+            //if( verbose ) NSLog(@"Sent JPEG; Width: %d Height: %d Size:%ld\n", width, height, _jpegSize );
         }
     } else {
         CVPixelBufferUnlockBaseAddress(ibuf, kCVPixelBufferLock_ReadOnly);
@@ -201,24 +240,26 @@ char frameDif( unsigned char *f1, unsigned char *f2, int l1, int w, int h, int v
 
 @end
 
-void setup_nanomsg_sockets( ucmd *cmd, int *nanoOut ) {
-    char *specOut = ucmd__get(cmd,"--out");
-    if( specOut ) {
-        *nanoOut = mynano__new( specOut, 0 ); // 0 means connect to socket
-        printf("Send data to nanomsg %s\n", specOut );
-    }
-    else *nanoOut = 0;
-}
-
-int run_stream( ucmd *cmd, char *udidIn, int nanoOut, char *outFile, int verbose );
+int run_stream( ucmd *cmd, char *udidIn, int nanoOut, char *outFile, int verbose, int frameSkip );
 
 void run_nano( ucmd *cmd ) {
-    int nanoIn = 0, nanoOut = 0;
-    setup_nanomsg_sockets( cmd, &nanoOut );
+    int nanoOut = -1;
+    
+    char *nanoSpec = ucmd__get(cmd,"--out");
+    setup_nanomsg_socket( nanoSpec, &nanoOut );
     char *outFile = ucmd__get(cmd,"--file");
     char *udid = ucmd__get(cmd,"--udid");
-    char *verbose = ucmd__get(cmd,"--verbose");
-    run_stream( cmd, udid, nanoOut, outFile, verbose ? 1 : 0 );
+    char *verbose = ucmd__get(cmd,"--v");
+    if( verbose ) {
+        NSLog(@"Running in verbose mode\n");
+    }
+    //char *nanoSpec = ucmd__get(cmd,"--out");
+    int frameSkip = 0;
+    char *frameSkipS = ucmd__get(cmd,"--frameSkip");
+    if( frameSkipS ) {
+        frameSkip = atoi( frameSkipS );
+    }
+    run_stream( cmd, udid, nanoOut, outFile, verbose ? 1 : 0, frameSkip );
 }
 
 int main( int argc, char *argv[] ) {
@@ -238,7 +279,7 @@ int main( int argc, char *argv[] ) {
     return 0;
 }
 
-int run_stream( ucmd *cmd, char *udidIn, int nanoOut, char *outFile, int verbose ) {
+int run_stream( ucmd *cmd, char *udidIn, int nanoOut, char *outFile, int verbose, int frameSkip ) {
     @autoreleasepool {
         NSString *udid = [NSString stringWithUTF8String:udidIn];
         
@@ -288,7 +329,10 @@ int run_stream( ucmd *cmd, char *udidIn, int nanoOut, char *outFile, int verbose
 
         dispatch_queue_t que = dispatch_queue_create("com.devicefarmer.que", DISPATCH_QUEUE_SERIAL);
         
-        RecodeDelegate *recoder = [[RecodeDelegate alloc] initWithFile:outFile andNanoOut:nanoOut andVerbose:verbose];
+        int sock = nn_socket( AF_SP, NN_PULL );
+        nn_bind( sock, "inproc://img");
+        
+        RecodeDelegate *recoder = [[RecodeDelegate alloc] initWithFile:outFile andVerbose:verbose andFrameSkip:frameSkip];
         
         [output setSampleBufferDelegate:recoder queue:que];
         
@@ -297,8 +341,14 @@ int run_stream( ucmd *cmd, char *udidIn, int nanoOut, char *outFile, int verbose
         
         [session startRunning];
         
+        
+        void *buf;
         while(1) {
-            [NSThread sleepForTimeInterval:1.0f];
+            int bytes = nn_recv( sock, &buf, NN_MSG, 0 );
+            nn_send( nanoOut, buf, bytes, 0 );
+            nn_freemsg( buf );
+            //NSLog(@"Received %d bytes", bytes );
+            //[NSThread sleepForTimeInterval:1.0f];
         }
         
         [session stopRunning];
