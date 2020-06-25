@@ -5,6 +5,8 @@
 #include "uclop.h"
 #include<nanomsg/nn.h>
 #include<nanomsg/pipeline.h>
+#include<stdint.h>
+#include<sys/time.h>
 
 int mynano__new( char *spec, int bind ) {
     int sock = nn_socket( AF_SP, bind ? NN_PULL : NN_PUSH );
@@ -106,6 +108,10 @@ char frameDif( unsigned char *f1, unsigned char *f2, int l1, int w, int h, int v
     return 0;
 }
 
+int64_t timespecDiff(struct timespec *timeA_p, struct timespec *timeB_p) {
+  return ((timeA_p->tv_sec * 1000000000) + timeA_p->tv_nsec) - ((timeB_p->tv_sec * 1000000000) + timeB_p->tv_nsec);
+}
+
 @interface RecodeDelegate : NSObject <AVCaptureVideoDataOutputSampleBufferDelegate>
 
 @property (assign) tjhandle compressor;
@@ -122,12 +128,11 @@ char frameDif( unsigned char *f1, unsigned char *f2, int l1, int w, int h, int v
 @property (assign) CMSampleBufferRef prevSample;
 @property (assign) unsigned char *prevBgra;
 @property (assign) CVImageBufferRef prevIbuf;
-//@property (assign) int nanoOut;
-//@property (assign) char *nanoSpec;
 @property (assign) int verbose;
 @property (assign) int outSock;
 @property (assign) int frameSkip;
 @property (assign) int frameNum;
+@property (assign) struct timespec prevTime;
 
 @end
 
@@ -145,8 +150,6 @@ char frameDif( unsigned char *f1, unsigned char *f2, int l1, int w, int h, int v
     _outFile = outFile;
     _prevBgra = NULL;
     _prevSample = NULL;
-    //_nanoOut = -1;
-    //_nanoSpec = nanoSpec;
     _verbose = verbose;
     _outSock = -1;
     _frameSkip = frameSkip;
@@ -174,8 +177,18 @@ char frameDif( unsigned char *f1, unsigned char *f2, int l1, int w, int h, int v
     }
     
     int dif = 1;
+    
+    struct timespec curTime;
+    clock_gettime(CLOCK_MONOTONIC, &curTime);
     if( _prevBgra ) {
         dif = frameDif( _prevBgra, bgra, bytesPerRow, width, height, _verbose );
+        
+        if( !dif ) {
+            int64_t timeDif = timespecDiff( &curTime, &_prevTime );
+            if( ( (double) timeDif / ( double ) 1000000 ) >= 1000 ) {
+                dif = 1;
+            }
+        }
     }
     
     _frameNum++;
@@ -193,6 +206,7 @@ char frameDif( unsigned char *f1, unsigned char *f2, int l1, int w, int h, int v
         _prevBgra = bgra;
         _prevIbuf = ibuf;
         _prevSample = sampleBuffer;
+        _prevTime = curTime;
         
         int res = tjCompress2(
             _compressor,
@@ -215,11 +229,6 @@ char frameDif( unsigned char *f1, unsigned char *f2, int l1, int w, int h, int v
             NSLog(@"Wrote JPEG; File:%s Width: %d Height: %d\n", _outFile, width, height );
             _wroteJpeg = 1;
         }
-        //if( _nanoSpec && _nanoOut == -1 ) {
-        //    NSLog(@"Attempting nanomsg setup");
-        //    setup_nanomsg_socket( _nanoSpec, &_nanoOut );
-        //    NSLog(@"Finished nanomsg setup; nanoOut=%d", _nanoOut);
-        //}
         if( _outSock == -1 ) {
             _outSock = nn_socket( AF_SP, NN_PUSH );
             nn_connect( _outSock, "inproc://img");
@@ -253,7 +262,6 @@ void run_nano( ucmd *cmd ) {
     if( verbose ) {
         NSLog(@"Running in verbose mode\n");
     }
-    //char *nanoSpec = ucmd__get(cmd,"--out");
     int frameSkip = 0;
     char *frameSkipS = ucmd__get(cmd,"--frameSkip");
     if( frameSkipS ) {
@@ -347,8 +355,6 @@ int run_stream( ucmd *cmd, char *udidIn, int nanoOut, char *outFile, int verbose
             int bytes = nn_recv( sock, &buf, NN_MSG, 0 );
             nn_send( nanoOut, buf, bytes, 0 );
             nn_freemsg( buf );
-            //NSLog(@"Received %d bytes", bytes );
-            //[NSThread sleepForTimeInterval:1.0f];
         }
         
         [session stopRunning];
