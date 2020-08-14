@@ -7,6 +7,7 @@
 #include<nanomsg/pipeline.h>
 #include<stdint.h>
 #include<sys/time.h>
+#include<stdio.h>
 
 int mynano__new( char *spec, int bind ) {
     int sock = nn_socket( AF_SP, bind ? NN_PULL : NN_PUSH );
@@ -270,6 +271,35 @@ void run_nano( ucmd *cmd ) {
     run_stream( cmd, udid, nanoOut, outFile, verbose ? 1 : 0, frameSkip );
 }
 
+void list_devs( ucmd *cmd ) {
+    @autoreleasepool {
+        CMIOObjectPropertyAddress prop = {
+            kCMIOHardwarePropertyAllowScreenCaptureDevices,
+            kCMIOObjectPropertyScopeGlobal,
+            kCMIOObjectPropertyElementMaster
+        };
+        UInt32 allow = 1;
+        CMIOObjectSetPropertyData(kCMIOObjectSystemObject, &prop, 0, NULL, sizeof(allow), &allow );
+    
+        //NSArray *devices = [AVCaptureDevice devicesWithMediaType:AVMediaTypeMuxed];
+        NSArray<AVMediaType> *device_types = [NSArray arrayWithObjects: AVCaptureDeviceTypeExternalUnknown, nil];
+        AVCaptureDeviceDiscoverySession *session = [AVCaptureDeviceDiscoverySession discoverySessionWithDeviceTypes:device_types mediaType:AVMediaTypeMuxed position:0];
+        NSArray<AVCaptureDevice *> *devices = [session devices];
+        
+        uint8_t count = [devices count];
+        for (AVCaptureDevice *device in devices) {
+            const char *name = [[device localizedName] UTF8String];
+            const char *id = [[device uniqueID] UTF8String];
+            //index            = [devices count] + [devices_muxed indexOfObject:device];
+            printf("--Device--\n  Name:%s\n  UDID:%s\n", name, id );
+        }
+    }
+}
+
+void run_version( ucmd *cmd ) {
+    printf("Commit:" GitCommit "\nDate:" GitDate "\nRemote:" GitRemote "\nVersion:" EasyVersion "\n" );
+}
+
 int main( int argc, char *argv[] ) {
     uopt *nano_options[] = {
         UOPT_REQUIRED("--udid","UDID of device to stream"),
@@ -283,6 +313,8 @@ int main( int argc, char *argv[] ) {
     };
     uclop *opts = uclop__new( NULL, NULL );
     uclop__addcmd( opts, "nano", "Stream using nanomsg", &run_nano, nano_options );
+    uclop__addcmd( opts, "version", "Version info", &run_version, NULL );
+    uclop__addcmd( opts, "list", "List IOS devices", &list_devs, NULL );
     uclop__run( opts, argc, argv );
     return 0;
 }
@@ -290,6 +322,8 @@ int main( int argc, char *argv[] ) {
 int run_stream( ucmd *cmd, char *udidIn, int nanoOut, char *outFile, int verbose, int frameSkip ) {
     @autoreleasepool {
         NSString *udid = [NSString stringWithUTF8String:udidIn];
+        NSString *nospace = [udid stringByReplacingOccurrencesOfString:@"-" withString:@""];
+        NSString *lower = [nospace lowercaseString];
         
         CMIOObjectPropertyAddress prop = {
             kCMIOHardwarePropertyAllowScreenCaptureDevices,
@@ -300,11 +334,11 @@ int run_stream( ucmd *cmd, char *udidIn, int nanoOut, char *outFile, int verbose
         CMIOObjectSetPropertyData(kCMIOObjectSystemObject, &prop, 0, NULL, sizeof(allow), &allow );
         
         for (int i = 0 ; i < 10; i++) {
-            if( [AVCaptureDevice deviceWithUniqueID: udid] != nil ) break;
+            if( [AVCaptureDevice deviceWithUniqueID: lower] != nil ) break;
             [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
         }
     
-        AVCaptureDevice *device = [AVCaptureDevice deviceWithUniqueID: udid];
+        AVCaptureDevice *device = [AVCaptureDevice deviceWithUniqueID: lower];
             
         if( device == nil ) {
             NSLog(@"device with udid '%@' not found", udid);

@@ -12,4 +12,8 @@ ivf_pull: ivf_pull.m uclop.h
 		-L/usr/local/opt/libjpeg-turbo/lib \
 		-lturbojpeg \
 		-lnanomsg \
+		-D GitCommit="\"$(GIT_COMMIT)\""\
+		-D GitDate="\"$(GIT_DATE)\""\
+		-D GitRemote="\"$(GIT_REMOTE)\""\
+		-D EasyVersion="\"$(EASY_VERSION)\""\
 		-o ivf_pull
