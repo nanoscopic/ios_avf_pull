@@ -322,8 +322,12 @@ int main( int argc, char *argv[] ) {
 int run_stream( ucmd *cmd, char *udidIn, int nanoOut, char *outFile, int verbose, int frameSkip ) {
     @autoreleasepool {
         NSString *udid = [NSString stringWithUTF8String:udidIn];
-        NSString *nospace = [udid stringByReplacingOccurrencesOfString:@"-" withString:@""];
-        NSString *lower = [nospace lowercaseString];
+        
+        // AVFoundation expects to receive the UDID *with* the dashes. Removing them breaks it.
+        NSString *nodash = [udid stringByReplacingOccurrencesOfString:@"-" withString:@""];
+        
+        // It seems both upper and lowercase UDID are accepted
+        //NSString *lower = [nodash lowercaseString];
         
         CMIOObjectPropertyAddress prop = {
             kCMIOHardwarePropertyAllowScreenCaptureDevices,
@@ -334,11 +338,16 @@ int run_stream( ucmd *cmd, char *udidIn, int nanoOut, char *outFile, int verbose
         CMIOObjectSetPropertyData(kCMIOObjectSystemObject, &prop, 0, NULL, sizeof(allow), &allow );
         
         for (int i = 0 ; i < 10; i++) {
-            if( [AVCaptureDevice deviceWithUniqueID: lower] != nil ) break;
+            if( [AVCaptureDevice deviceWithUniqueID: udid ] != nil ) break;
+            
+            // Checking for the nodash version even though it doesn't work, because I'm paranoid
+            //   and I dislike secret behavior that could change in the future.
+            if( [AVCaptureDevice deviceWithUniqueID: nodash ] != nil ) break;
+            
             [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
         }
     
-        AVCaptureDevice *device = [AVCaptureDevice deviceWithUniqueID: lower];
+        AVCaptureDevice *device = [AVCaptureDevice deviceWithUniqueID: nodash];
             
         if( device == nil ) {
             NSLog(@"device with udid '%@' not found", udid);
