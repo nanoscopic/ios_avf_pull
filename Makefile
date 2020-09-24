@@ -17,3 +17,6 @@ ivf_pull: ivf_pull.m uclop.h
 		-D GitRemote="\"$(GIT_REMOTE)\""\
 		-D EasyVersion="\"$(EASY_VERSION)\""\
 		-o ivf_pull
+
+clean:
+	$(RM) ivf_pull

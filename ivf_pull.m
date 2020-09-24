@@ -322,9 +322,11 @@ int main( int argc, char *argv[] ) {
 int run_stream( ucmd *cmd, char *udidIn, int nanoOut, char *outFile, int verbose, int frameSkip ) {
     @autoreleasepool {
         NSString *udid = [NSString stringWithUTF8String:udidIn];
+        char *udidS = [udid UTF8String];
         
         // AVFoundation expects to receive the UDID *with* the dashes. Removing them breaks it.
         NSString *nodash = [udid stringByReplacingOccurrencesOfString:@"-" withString:@""];
+        char *nodashS = [nodash UTF8String];
         
         // It seems both upper and lowercase UDID are accepted
         //NSString *lower = [nodash lowercaseString];
@@ -337,7 +339,29 @@ int run_stream( ucmd *cmd, char *udidIn, int nanoOut, char *outFile, int verbose
         UInt32 allow = 1;
         CMIOObjectSetPropertyData(kCMIOObjectSystemObject, &prop, 0, NULL, sizeof(allow), &allow );
         
-        for (int i = 0 ; i < 10; i++) {
+        NSArray<AVMediaType> *device_types = [NSArray arrayWithObjects: AVCaptureDeviceTypeExternalUnknown, nil];
+        AVCaptureDeviceDiscoverySession *session1 = [AVCaptureDeviceDiscoverySession discoverySessionWithDeviceTypes:device_types mediaType:AVMediaTypeMuxed position:0];
+        NSArray<AVCaptureDevice *> *devices = [session1 devices];
+        
+        uint8_t count = [devices count];
+        AVCaptureDevice *foundDevice = NULL;
+        
+        for (AVCaptureDevice *device in devices) {
+        	const char *name = [[device localizedName] UTF8String];
+        	const char *id = [[device uniqueID] UTF8String];
+        	
+        	NSLog(@"checking %@ against %@", [device uniqueID], udid );
+        	if( !strcmp( id, udidS ) ) { foundDevice = device; break; }
+        	NSLog(@"checking %@ against %@", [device uniqueID], nodash );
+        	if( !strcmp( id, nodashS ) ) { foundDevice = device; break; }
+        }
+        
+        if( foundDevice == NULL ) {
+        	NSLog(@"device with udid '%@' not found", udid);
+            return 1;
+        }
+        
+        /*for (int i = 0 ; i < 10; i++) {
             if( [AVCaptureDevice deviceWithUniqueID: udid ] != nil ) break;
             
             // Checking for the nodash version even though it doesn't work, because I'm paranoid
@@ -345,21 +369,21 @@ int run_stream( ucmd *cmd, char *udidIn, int nanoOut, char *outFile, int verbose
             if( [AVCaptureDevice deviceWithUniqueID: nodash ] != nil ) break;
             
             [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
-        }
+        }*/
     
-        AVCaptureDevice *device = [AVCaptureDevice deviceWithUniqueID: nodash];
+        /*AVCaptureDevice *device = [AVCaptureDevice deviceWithUniqueID: nodash];
             
         if( device == nil ) {
             NSLog(@"device with udid '%@' not found", udid);
             return 1;
-        }
+        }*/
         
         AVCaptureSession * session = [[AVCaptureSession alloc] init];
         
         [session beginConfiguration];
         
         NSError *error;
-        AVCaptureDeviceInput *input = [AVCaptureDeviceInput deviceInputWithDevice:device error:&error];
+        AVCaptureDeviceInput *input = [AVCaptureDeviceInput deviceInputWithDevice:foundDevice error:&error];
         if( input == nil ) {
             NSLog(@"%@", error);
             return false;
